@@ -59,14 +59,16 @@ func udp_ping(host string, port string, timeout time.Duration) {
 func icmp_ping(host string) {
 	ip, err := net.ResolveIPAddr("ip4", host)
 	if err != nil {
-		fmt.Println("Error: ", err)
+		fmt.Println("Error1: ", err)
 		return
 	}
+	fmt.Println((ip.IP).String())
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
-		fmt.Println("Error: ", err)
+		fmt.Println("Error2: ", err)
 		return
 	}
+	fmt.Println("Listening on ", conn.LocalAddr())
 	defer conn.Close()
 
 	msg := icmp.Message{
@@ -80,31 +82,41 @@ func icmp_ping(host string) {
 	}
 	msg_bytes, err := msg.Marshal(nil)
 	if err != nil {
-		fmt.Println("Error: ", err)
+		fmt.Println("Error3: ", err)
 		return
 	}
-	if _, err := conn.WriteTo(msg_bytes, &net.UDPAddr{IP: ip.IP}); err != nil {
-		fmt.Println("Error: ", err)
+
+	fmt.Println("Error data:", ip.IP)
+	fmt.Println("Error data:", msg_bytes)
+
+	target, err := net.ResolveUDPAddr("udp", fmt.Sprintf(ip.IP.String(), ":7"))
+	if err != nil {
+		fmt.Println("Error31: ", err)
+		return
+	}
+	fmt.Println("Error data32:", target)
+	if _, err := conn.WriteTo(msg_bytes, target); err != nil {
+		fmt.Println("Error4: ", err)
 		panic(err)
 	}
 
 	err = conn.SetReadDeadline(time.Now().Add(time.Second * 1))
 	if err != nil {
-		fmt.Println("Error: ", err)
+		fmt.Println("Error5: ", err)
 		return
 	}
-	reply := make([]byte, 1500)
+	reply := make([]byte, 644)
 	n, _, err := conn.ReadFrom(reply)
 
 	if err != nil {
-		fmt.Println("Error: ", err)
+		fmt.Println("Error6: ", err)
 		return
 	}
 
 	parsed_reply, err := icmp.ParseMessage(1, reply[:n])
 
 	if err != nil {
-		fmt.Println("Error: ", err)
+		fmt.Println("Error7: ", err)
 		return
 	}
 
