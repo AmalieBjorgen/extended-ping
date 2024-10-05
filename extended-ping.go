@@ -14,11 +14,17 @@ import (
 func main() {
 	var timeout time.Duration = time.Second * 3
 	host := "google.com"
-	port := "80"
+	common_ports := [...]string{"20", "21", "22", "23", "25", "53", "80", "110", "143", "443", "3389", "8080"}
 
-	tcp_ping(host, port, timeout)
 	icmp_ping(host)
-	//udp_ping(host, port, timeout)
+
+	for _, port := range common_ports {
+		tcp_ping(host, port, timeout)
+	}
+
+	// for _, port := range common_ports {
+	// 	udp_ping(host, port, timeout)
+	// }
 
 }
 
@@ -26,17 +32,12 @@ func tcp_ping(host string, port string, timeout time.Duration) {
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.Dial("tcp", fmt.Sprintf("%v:%v", host, port))
 	if err != nil {
-		fmt.Println("Error: ", err)
+		fmt.Printf("TCP ping to %s:%s unsuccessful.\n", host, port)
 		return
 	}
+	defer conn.Close()
 
-	fmt.Fprintf(conn, "GET / HTTP/1.0\r\n\r\n")
-	status, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		fmt.Println("Error: ", err)
-		return
-	}
-	fmt.Println("TCP ping successful\n", status)
+	fmt.Printf("TCP ping to %s:%s successful.\n", host, port)
 }
 
 func udp_ping(host string, port string, timeout time.Duration) {
@@ -62,13 +63,13 @@ func icmp_ping(host string) {
 		fmt.Println("Error1: ", err)
 		return
 	}
-	fmt.Println((ip.IP).String())
+
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
 		fmt.Println("Error2: ", err)
 		return
 	}
-	fmt.Println("Listening on ", conn.LocalAddr())
+
 	defer conn.Close()
 
 	msg := icmp.Message{
@@ -86,16 +87,7 @@ func icmp_ping(host string) {
 		return
 	}
 
-	fmt.Println("Error data:", ip.IP)
-	fmt.Println("Error data:", msg_bytes)
-
-	target, err := net.ResolveUDPAddr("udp", fmt.Sprintf(ip.IP.String(), ":7"))
-	if err != nil {
-		fmt.Println("Error31: ", err)
-		return
-	}
-	fmt.Println("Error data32:", target)
-	if _, err := conn.WriteTo(msg_bytes, target); err != nil {
+	if _, err := conn.WriteTo(msg_bytes, ip); err != nil {
 		fmt.Println("Error4: ", err)
 		panic(err)
 	}
@@ -123,7 +115,7 @@ func icmp_ping(host string) {
 	switch parsed_reply.Code {
 	case 0:
 		// Got a reply so we can save this
-		fmt.Printf("Got Reply from %s\n", host)
+		fmt.Printf("ICMP ping to %s successful.\n", host)
 	case 3:
 		fmt.Printf("Host %s is unreachable\n", host)
 		// Given that we don't expect google to be unreachable, we can assume that our network is down
