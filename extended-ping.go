@@ -23,7 +23,7 @@ func main() {
 		fmt.Println("Cannot resolve IP address to host.")
 		os.Exit(1)
 	}
-	var timeout time.Duration = time.Second * 3
+	var timeout time.Duration = time.Second * 10
 
 	common_ports := [...]string{"20", "21", "22", "23", "25", "53", "80", "110", "143", "443", "3389", "8080"}
 
@@ -36,7 +36,6 @@ func main() {
 	for _, port := range common_ports {
 		udp_ping(ip, port, timeout)
 	}
-
 }
 
 func tcp_ping(host *net.IPAddr, port string, timeout time.Duration) {
