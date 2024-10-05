@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"net"
 	"os"
@@ -25,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 	var timeout time.Duration = time.Second * 3
-	//host := "google.com"
+
 	common_ports := [...]string{"20", "21", "22", "23", "25", "53", "80", "110", "143", "443", "3389", "8080"}
 
 	icmp_ping(ip)
@@ -34,9 +33,9 @@ func main() {
 		tcp_ping(ip, port, timeout)
 	}
 
-	// for _, port := range common_ports {
-	// 	udp_ping(host, port, timeout)
-	// }
+	for _, port := range common_ports {
+		udp_ping(ip, port, timeout)
+	}
 
 }
 
@@ -56,17 +55,12 @@ func udp_ping(host *net.IPAddr, port string, timeout time.Duration) {
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.Dial("udp", fmt.Sprintf("%v:%v", host, port))
 	if err != nil {
-		fmt.Println("Error: ", err)
+		fmt.Printf("UDP ping to %s:%s unsuccessful.\n", host, port)
 		return
 	}
+	defer conn.Close()
 
-	fmt.Fprintf(conn, "GET / HTTP/1.0\r\n\r\n")
-	status, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		fmt.Println("Error: ", err)
-		return
-	}
-	fmt.Println("UDP ping successful\n", status)
+	fmt.Printf("UDP ping to %s:%s successful.\n", host, port)
 }
 
 func icmp_ping(host *net.IPAddr) {
@@ -89,32 +83,32 @@ func icmp_ping(host *net.IPAddr) {
 	}
 	msg_bytes, err := msg.Marshal(nil)
 	if err != nil {
-		fmt.Println("Error3: ", err)
+		fmt.Println(err)
 		return
 	}
 
 	if _, err := conn.WriteTo(msg_bytes, host); err != nil {
-		fmt.Println("Error4: ", err)
+		fmt.Println(err)
 		panic(err)
 	}
 
 	err = conn.SetReadDeadline(time.Now().Add(time.Second * 1))
 	if err != nil {
-		fmt.Println("Error5: ", err)
+		fmt.Println(err)
 		return
 	}
 	reply := make([]byte, 644)
 	n, _, err := conn.ReadFrom(reply)
 
 	if err != nil {
-		fmt.Println("Error6: ", err)
+		fmt.Println(err)
 		return
 	}
 
 	parsed_reply, err := icmp.ParseMessage(1, reply[:n])
 
 	if err != nil {
-		fmt.Println("Error7: ", err)
+		fmt.Println(err)
 		return
 	}
 
