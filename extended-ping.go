@@ -12,14 +12,26 @@ import (
 )
 
 func main() {
+	args := os.Args
+	if len(args) != 2 {
+		fmt.Println("Usage: eping <host>")
+		os.Exit(1)
+	}
+
+	host := args[1]
+	ip, err := net.ResolveIPAddr("ip4", host)
+	if err != nil {
+		fmt.Println("Cannot resolve IP address to host.")
+		os.Exit(1)
+	}
 	var timeout time.Duration = time.Second * 3
-	host := "google.com"
+	//host := "google.com"
 	common_ports := [...]string{"20", "21", "22", "23", "25", "53", "80", "110", "143", "443", "3389", "8080"}
 
-	icmp_ping(host)
+	icmp_ping(ip)
 
 	for _, port := range common_ports {
-		tcp_ping(host, port, timeout)
+		tcp_ping(ip, port, timeout)
 	}
 
 	// for _, port := range common_ports {
@@ -28,7 +40,7 @@ func main() {
 
 }
 
-func tcp_ping(host string, port string, timeout time.Duration) {
+func tcp_ping(host *net.IPAddr, port string, timeout time.Duration) {
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.Dial("tcp", fmt.Sprintf("%v:%v", host, port))
 	if err != nil {
@@ -40,7 +52,7 @@ func tcp_ping(host string, port string, timeout time.Duration) {
 	fmt.Printf("TCP ping to %s:%s successful.\n", host, port)
 }
 
-func udp_ping(host string, port string, timeout time.Duration) {
+func udp_ping(host *net.IPAddr, port string, timeout time.Duration) {
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.Dial("udp", fmt.Sprintf("%v:%v", host, port))
 	if err != nil {
@@ -57,13 +69,7 @@ func udp_ping(host string, port string, timeout time.Duration) {
 	fmt.Println("UDP ping successful\n", status)
 }
 
-func icmp_ping(host string) {
-	ip, err := net.ResolveIPAddr("ip4", host)
-	if err != nil {
-		fmt.Println("Error1: ", err)
-		return
-	}
-
+func icmp_ping(host *net.IPAddr) {
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
 		fmt.Println("Error2: ", err)
@@ -87,7 +93,7 @@ func icmp_ping(host string) {
 		return
 	}
 
-	if _, err := conn.WriteTo(msg_bytes, ip); err != nil {
+	if _, err := conn.WriteTo(msg_bytes, host); err != nil {
 		fmt.Println("Error4: ", err)
 		panic(err)
 	}
