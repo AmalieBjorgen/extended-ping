@@ -24,7 +24,7 @@ func main() {
 		fmt.Println("Cannot resolve IP address to host.")
 		os.Exit(1)
 	}
-	var timeout time.Duration = time.Second * 10 // Seconds
+	var timeout time.Duration = time.Second * 3 // Seconds
 
 	common_ports_tcp := [...]string{"20", "21", "22", "23", "25", "53", "80", "110", "143", "443", "3389", "8080"}
 	common_ports_udp := [...]string{"53", "67", "68", "69", "123", "161", "500", "514", "1812", "1813"}
@@ -131,16 +131,12 @@ func icmp_ping(host *net.IPAddr) {
 
 	switch parsed_reply.Code {
 	case 0:
-		// Got a reply so we can save this
 		fmt.Printf("ICMP ping to %s successful.\n", host)
 	case 3:
 		fmt.Printf("Host %s is unreachable\n", host)
-		// Given that we don't expect google to be unreachable, we can assume that our network is down
 	case 11:
-		// Time Exceeded so we can assume our network is slow
 		fmt.Printf("Host %s is slow\n", host)
 	default:
-		// We don't know what this is so we can assume it's unreachable
 		fmt.Printf("Host %s is unreachable\n", host)
 	}
 }
