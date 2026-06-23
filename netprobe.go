@@ -19,6 +19,7 @@ func main() {
 	var timeout = 3 * time.Second
 	var count = 1
 	var showCert bool
+	var showTrace bool
 	var ipVersion = "ip"
 
 	args := os.Args[1:]
@@ -73,6 +74,8 @@ func main() {
 			ipVersion = "ip6"
 		} else if arg == "--cert" {
 			showCert = true
+		} else if arg == "--trace" || arg == "--traceroute" {
+			showTrace = true
 		} else if arg == "-h" || arg == "--help" {
 			printUsage()
 			os.Exit(0)
@@ -97,6 +100,11 @@ func main() {
 	if err != nil {
 		fmt.Printf("Cannot resolve IP address for host '%s': %v\n", host, err)
 		os.Exit(1)
+	}
+
+	if showTrace {
+		run_traceroute(host, ip, timeout)
+		return
 	}
 
 	if showCert {
@@ -200,6 +208,7 @@ func printUsage() {
 	fmt.Println("  -4                      Force IPv4 resolution")
 	fmt.Println("  -6                      Force IPv6 resolution")
 	fmt.Println("  --cert                  Inspect TLS certificate details (defaults to port 443)")
+	fmt.Println("  --trace, --traceroute   Trace route to the host")
 	fmt.Println("  -h, --help              Show this help message")
 }
 
@@ -479,5 +488,148 @@ func tlsVersionString(v uint16) string {
 		return "TLS 1.3"
 	default:
 		return fmt.Sprintf("TLS 0x%04X", v)
+	}
+}
+
+// run_traceroute executes an ICMP-based traceroute to the destination
+func run_traceroute(host string, ip *net.IPAddr, timeout time.Duration) {
+	isIPv6 := ip.IP.To4() == nil
+	network := "udp4"
+	proto := 1 // ICMPv4 protocol number
+	msgType := icmp.Type(ipv4.ICMPTypeEcho)
+	listenAddr := "0.0.0.0"
+
+	if isIPv6 {
+		network = "udp6"
+		proto = 58 // ICMPv6 protocol number
+		msgType = ipv6.ICMPTypeEchoRequest
+		listenAddr = "::"
+	}
+
+	var conn *icmp.PacketConn
+	var err error
+	var raw = true
+
+	// Attempt raw socket first for full traceroute path
+	if isIPv6 {
+		conn, err = icmp.ListenPacket("ip6:ipv6-icmp", listenAddr)
+		if err != nil {
+			raw = false
+			conn, err = icmp.ListenPacket(network, listenAddr)
+		}
+	} else {
+		conn, err = icmp.ListenPacket("ip4:icmp", listenAddr)
+		if err != nil {
+			raw = false
+			conn, err = icmp.ListenPacket(network, listenAddr)
+		}
+	}
+
+	if err != nil {
+		fmt.Printf("Traceroute error: failed to listen on socket: %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	if !raw {
+		fmt.Println("Note: Running in unprivileged mode. Intermediate hops may time out.")
+		fmt.Println("      Run with sudo / root permissions to view all intermediate routers.")
+	}
+
+	var hostStr string
+	if host == ip.String() {
+		hostStr = ip.String()
+	} else {
+		hostStr = fmt.Sprintf("%s (%s)", host, ip.String())
+	}
+
+	fmt.Printf("\nTraceroute to %s, 30 hops max:\n", hostStr)
+
+	maxHops := 30
+	for hop := 1; hop <= maxHops; hop++ {
+		// Set TTL/Hop Limit
+		if isIPv6 {
+			ipv6Conn := conn.IPv6PacketConn()
+			if ipv6Conn != nil {
+				ipv6Conn.SetHopLimit(hop)
+			}
+		} else {
+			ipv4Conn := conn.IPv4PacketConn()
+			if ipv4Conn != nil {
+				ipv4Conn.SetTTL(hop)
+			}
+		}
+
+		msg := icmp.Message{
+			Type: msgType,
+			Code: 0,
+			Body: &icmp.Echo{
+				ID:   os.Getpid() & 0xffff,
+				Seq:  hop,
+				Data: []byte("ping"),
+			},
+		}
+		msg_bytes, err := msg.Marshal(nil)
+		if err != nil {
+			fmt.Printf(" %2d  Error marshalling packet: %v\n", hop, err)
+			continue
+		}
+
+		start := time.Now()
+		dst := &net.UDPAddr{IP: ip.IP}
+
+		if _, err := conn.WriteTo(msg_bytes, dst); err != nil {
+			fmt.Printf(" %2d  Error sending packet: %v\n", hop, err)
+			continue
+		}
+
+		err = conn.SetReadDeadline(time.Now().Add(timeout))
+		if err != nil {
+			fmt.Printf(" %2d  Error setting timeout: %v\n", hop, err)
+			continue
+		}
+
+		reply := make([]byte, 1500)
+		n, peer, err := conn.ReadFrom(reply)
+		duration := time.Since(start)
+
+		if err != nil {
+			fmt.Printf(" %2d  *\n", hop)
+			continue
+		}
+
+		parsed_reply, err := icmp.ParseMessage(proto, reply[:n])
+		if err != nil {
+			fmt.Printf(" %2d  Error parsing reply from %v\n", hop, peer)
+			continue
+		}
+
+		// Parse peer host address
+		peerIP := peer.String()
+		if h, _, err := net.SplitHostPort(peerIP); err == nil {
+			peerIP = h
+		}
+
+		if isIPv6 {
+			switch parsed_reply.Type {
+			case ipv6.ICMPTypeTimeExceeded:
+				fmt.Printf(" %2d  %s (%s)\n", hop, peerIP, formatDuration(duration))
+			case ipv6.ICMPTypeEchoReply:
+				fmt.Printf(" %2d  %s (%s) [Reached Destination]\n", hop, peerIP, formatDuration(duration))
+				return
+			default:
+				fmt.Printf(" %2d  %s (Type: %v)\n", hop, peerIP, parsed_reply.Type)
+			}
+		} else {
+			switch parsed_reply.Type {
+			case ipv4.ICMPTypeTimeExceeded:
+				fmt.Printf(" %2d  %s (%s)\n", hop, peerIP, formatDuration(duration))
+			case ipv4.ICMPTypeEchoReply:
+				fmt.Printf(" %2d  %s (%s) [Reached Destination]\n", hop, peerIP, formatDuration(duration))
+				return
+			default:
+				fmt.Printf(" %2d  %s (Type: %v)\n", hop, peerIP, parsed_reply.Type)
+			}
+		}
 	}
 }
