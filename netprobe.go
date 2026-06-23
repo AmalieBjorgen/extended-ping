@@ -155,7 +155,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: eping <host> [options]")
+	fmt.Println("Usage: netprobe <host> [options]")
 	fmt.Println("\nOptions:")
 	fmt.Println("  -p, --port <port>       TCP port to check (e.g., 80, 443)")
 	fmt.Println("  -t, --timeout <timeout> Timeout duration (e.g., 3s, 5)")

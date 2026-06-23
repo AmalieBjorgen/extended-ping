@@ -1,4 +1,4 @@
-module extended-ping
+module netprobe
 
 go 1.23.0
 
