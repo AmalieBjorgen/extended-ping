@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 func main() {
@@ -18,6 +19,7 @@ func main() {
 	var timeout = 3 * time.Second
 	var count = 1
 	var showCert bool
+	var ipVersion = "ip"
 
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -65,6 +67,10 @@ func main() {
 				fmt.Println("Error: flag -c/--count requires an argument")
 				os.Exit(1)
 			}
+		} else if arg == "-4" {
+			ipVersion = "ip4"
+		} else if arg == "-6" {
+			ipVersion = "ip6"
 		} else if arg == "--cert" {
 			showCert = true
 		} else if arg == "-h" || arg == "--help" {
@@ -87,7 +93,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ip, err := net.ResolveIPAddr("ip4", host)
+	ip, err := net.ResolveIPAddr(ipVersion, host)
 	if err != nil {
 		fmt.Printf("Cannot resolve IP address for host '%s': %v\n", host, err)
 		os.Exit(1)
@@ -191,6 +197,8 @@ func printUsage() {
 	fmt.Println("  -p, --port <port>       TCP port to check (e.g., 80, 443)")
 	fmt.Println("  -t, --timeout <timeout> Timeout duration (e.g., 3s, 5)")
 	fmt.Println("  -c, --count <count>     Number of attempts to perform (default: 1)")
+	fmt.Println("  -4                      Force IPv4 resolution")
+	fmt.Println("  -6                      Force IPv6 resolution")
 	fmt.Println("  --cert                  Inspect TLS certificate details (defaults to port 443)")
 	fmt.Println("  -h, --help              Show this help message")
 }
@@ -229,9 +237,22 @@ func tcp_ping(host string, ip *net.IPAddr, port string, timeout time.Duration) (
 	return true, duration
 }
 
-// icmp_ping attempts an unprivileged ICMP ping using udp4 socket
+// icmp_ping attempts an unprivileged ICMP ping using udp4/udp6 socket
 func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) (bool, time.Duration) {
-	conn, err := icmp.ListenPacket("udp4", "0.0.0.0")
+	isIPv6 := ip.IP.To4() == nil
+	network := "udp4"
+	proto := 1 // ICMPv4 protocol number
+	msgType := icmp.Type(ipv4.ICMPTypeEcho)
+	listenAddr := "0.0.0.0"
+
+	if isIPv6 {
+		network = "udp6"
+		proto = 58 // ICMPv6 protocol number
+		msgType = ipv6.ICMPTypeEchoRequest
+		listenAddr = "::"
+	}
+
+	conn, err := icmp.ListenPacket(network, listenAddr)
 	if err != nil {
 		fmt.Printf("ICMP ping error: failed to listen on socket: %v\n", err)
 		return false, 0
@@ -246,7 +267,7 @@ func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) (bool, time.D
 	}
 
 	msg := icmp.Message{
-		Type: ipv4.ICMPTypeEcho,
+		Type: msgType,
 		Code: 0,
 		Body: &icmp.Echo{
 			ID:   os.Getpid() & 0xffff,
@@ -281,25 +302,42 @@ func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) (bool, time.D
 		return false, duration
 	}
 
-	parsed_reply, err := icmp.ParseMessage(1, reply[:n])
+	parsed_reply, err := icmp.ParseMessage(proto, reply[:n])
 	if err != nil {
 		fmt.Printf("ICMP ping error: failed to parse reply: %v\n", err)
 		return false, duration
 	}
 
-	switch parsed_reply.Type {
-	case ipv4.ICMPTypeEchoReply:
-		fmt.Printf("ICMP ping to %s successful - RTT: %s\n", hostStr, formatDuration(duration))
-		return true, duration
-	case ipv4.ICMPTypeDestinationUnreachable:
-		fmt.Printf("ICMP ping to %s failed: Destination Unreachable\n", hostStr)
-		return false, duration
-	case ipv4.ICMPTypeTimeExceeded:
-		fmt.Printf("ICMP ping to %s failed: Time Exceeded\n", hostStr)
-		return false, duration
-	default:
-		fmt.Printf("ICMP ping to %s unsuccessful (ICMP type: %v, code: %d)\n", hostStr, parsed_reply.Type, parsed_reply.Code)
-		return false, duration
+	if isIPv6 {
+		switch parsed_reply.Type {
+		case ipv6.ICMPTypeEchoReply:
+			fmt.Printf("ICMP ping to %s successful - RTT: %s\n", hostStr, formatDuration(duration))
+			return true, duration
+		case ipv6.ICMPTypeDestinationUnreachable:
+			fmt.Printf("ICMP ping to %s failed: Destination Unreachable\n", hostStr)
+			return false, duration
+		case ipv6.ICMPTypeTimeExceeded:
+			fmt.Printf("ICMP ping to %s failed: Time Exceeded\n", hostStr)
+			return false, duration
+		default:
+			fmt.Printf("ICMP ping to %s unsuccessful (ICMP type: %v, code: %d)\n", hostStr, parsed_reply.Type, parsed_reply.Code)
+			return false, duration
+		}
+	} else {
+		switch parsed_reply.Type {
+		case ipv4.ICMPTypeEchoReply:
+			fmt.Printf("ICMP ping to %s successful - RTT: %s\n", hostStr, formatDuration(duration))
+			return true, duration
+		case ipv4.ICMPTypeDestinationUnreachable:
+			fmt.Printf("ICMP ping to %s failed: Destination Unreachable\n", hostStr)
+			return false, duration
+		case ipv4.ICMPTypeTimeExceeded:
+			fmt.Printf("ICMP ping to %s failed: Time Exceeded\n", hostStr)
+			return false, duration
+		default:
+			fmt.Printf("ICMP ping to %s unsuccessful (ICMP type: %v, code: %d)\n", hostStr, parsed_reply.Type, parsed_reply.Code)
+			return false, duration
+		}
 	}
 }
 
