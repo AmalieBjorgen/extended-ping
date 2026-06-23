@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"os"
@@ -15,6 +17,7 @@ func main() {
 	var port string
 	var timeout = 3 * time.Second
 	var count = 1
+	var showCert bool
 
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -62,6 +65,8 @@ func main() {
 				fmt.Println("Error: flag -c/--count requires an argument")
 				os.Exit(1)
 			}
+		} else if arg == "--cert" {
+			showCert = true
 		} else if arg == "-h" || arg == "--help" {
 			printUsage()
 			os.Exit(0)
@@ -86,6 +91,25 @@ func main() {
 	if err != nil {
 		fmt.Printf("Cannot resolve IP address for host '%s': %v\n", host, err)
 		os.Exit(1)
+	}
+
+	if showCert {
+		if port == "" {
+			port = "443"
+		}
+		var certSuccess bool
+		for i := 0; i < count; i++ {
+			if print_certificate(host, ip, port, timeout) {
+				certSuccess = true
+			}
+			if i < count-1 {
+				time.Sleep(time.Second)
+			}
+		}
+		if !certSuccess {
+			os.Exit(1)
+		}
+		return
 	}
 
 	if port != "" {
@@ -136,6 +160,7 @@ func printUsage() {
 	fmt.Println("  -p, --port <port>       TCP port to check (e.g., 80, 443)")
 	fmt.Println("  -t, --timeout <timeout> Timeout duration (e.g., 3s, 5)")
 	fmt.Println("  -c, --count <count>     Number of attempts to perform (default: 1)")
+	fmt.Println("  --cert                  Inspect TLS certificate details (defaults to port 443)")
 	fmt.Println("  -h, --help              Show this help message")
 }
 
@@ -245,4 +270,82 @@ func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) bool {
 		fmt.Printf("ICMP ping to %s unsuccessful (ICMP type: %v, code: %d)\n", hostStr, parsed_reply.Type, parsed_reply.Code)
 		return false
 	}
+}
+
+// print_certificate establishes a TLS connection to print certificate information
+func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Duration) bool {
+	config := &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         host,
+	}
+
+	var hostStr string
+	if host == ip.String() {
+		hostStr = ip.String()
+	} else {
+		hostStr = fmt.Sprintf("%s (%s)", host, ip.String())
+	}
+
+	dialer := &net.Dialer{Timeout: timeout}
+	start := time.Now()
+	conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(ip.String(), port), config)
+	duration := time.Since(start)
+	if err != nil {
+		fmt.Printf("TLS connection to %s:%s failed: %v\n", hostStr, port, err)
+		return false
+	}
+	defer conn.Close()
+
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		fmt.Printf("TLS connection to %s:%s successful, but no certificates presented.\n", hostStr, port)
+		return false
+	}
+
+	cert := state.PeerCertificates[0]
+	fmt.Printf("TLS connection to %s:%s successful (RTT: %v)\n\n", hostStr, port, formatDuration(duration))
+	fmt.Printf("Certificate Details:\n")
+	fmt.Printf("  Subject (CN): %s\n", cert.Subject.CommonName)
+	if len(cert.Subject.Organization) > 0 {
+		fmt.Printf("  Organization: %s\n", cert.Subject.Organization[0])
+	}
+	fmt.Printf("  Issuer:       %s\n", cert.Issuer.CommonName)
+	fmt.Printf("  Valid From:   %s\n", cert.NotBefore.Format("2006-01-02 15:04:05 UTC"))
+	fmt.Printf("  Valid Until:  %s\n", cert.NotAfter.Format("2006-01-02 15:04:05 UTC"))
+
+	// Check expiration status
+	now := time.Now()
+	if now.Before(cert.NotBefore) {
+		fmt.Printf("  Status:       Not yet valid (starts in %v)\n", cert.NotBefore.Sub(now).Round(time.Hour))
+	} else if now.After(cert.NotAfter) {
+		fmt.Printf("  Status:       Expired (expired %v ago)\n", now.Sub(cert.NotAfter).Round(time.Hour))
+	} else {
+		days := int(cert.NotAfter.Sub(now).Hours() / 24)
+		if days > 0 {
+			fmt.Printf("  Status:       Valid (expires in %d days)\n", days)
+		} else {
+			fmt.Printf("  Status:       Valid (expires in %v)\n", cert.NotAfter.Sub(now).Round(time.Minute))
+		}
+	}
+
+	// Verification check
+	opts := x509.VerifyOptions{
+		DNSName: host,
+	}
+	_, verifyErr := cert.Verify(opts)
+	if verifyErr != nil {
+		fmt.Printf("  Verification: Untrusted/Invalid (%v)\n", verifyErr)
+	} else {
+		fmt.Printf("  Verification: Trusted\n")
+	}
+
+	if len(cert.DNSNames) > 0 {
+		if len(cert.DNSNames) > 5 {
+			fmt.Printf("  SANs:         %v... (and %d more)\n", cert.DNSNames[:5], len(cert.DNSNames)-5)
+		} else {
+			fmt.Printf("  SANs:         %v\n", cert.DNSNames)
+		}
+	}
+
+	return true
 }
