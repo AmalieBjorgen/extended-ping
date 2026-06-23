@@ -97,16 +97,22 @@ func main() {
 		if port == "" {
 			port = "443"
 		}
-		var certSuccess bool
+		var rtts []time.Duration
+		var successCount int
 		for i := 0; i < count; i++ {
-			if print_certificate(host, ip, port, timeout) {
-				certSuccess = true
+			success, duration := print_certificate(host, ip, port, timeout)
+			if success {
+				successCount++
+				rtts = append(rtts, duration)
 			}
 			if i < count-1 {
 				time.Sleep(time.Second)
 			}
 		}
-		if !certSuccess {
+		if count > 1 {
+			printSummary(host, count, successCount, rtts)
+		}
+		if successCount == 0 {
 			os.Exit(1)
 		}
 		return
@@ -114,9 +120,14 @@ func main() {
 
 	if port != "" {
 		var tcpSuccess bool
+		var rtts []time.Duration
+		var successCount int
 		for i := 0; i < count; i++ {
-			if tcp_ping(host, ip, port, timeout) {
+			success, duration := tcp_ping(host, ip, port, timeout)
+			if success {
 				tcpSuccess = true
+				successCount++
+				rtts = append(rtts, duration)
 			}
 			if i < count-1 {
 				time.Sleep(time.Second)
@@ -126,27 +137,47 @@ func main() {
 		if !tcpSuccess {
 			fmt.Println("Falling back to ICMP ping...")
 			var icmpSuccess bool
+			var icmpRtts []time.Duration
+			var icmpSuccessCount int
 			for i := 0; i < count; i++ {
-				if icmp_ping(host, ip, timeout) {
+				success, duration := icmp_ping(host, ip, timeout)
+				if success {
 					icmpSuccess = true
+					icmpSuccessCount++
+					icmpRtts = append(icmpRtts, duration)
 				}
 				if i < count-1 {
 					time.Sleep(time.Second)
 				}
 			}
+			if count > 1 {
+				printSummary(host, count, icmpSuccessCount, icmpRtts)
+			}
 			if !icmpSuccess {
 				os.Exit(1)
+			}
+		} else {
+			if count > 1 {
+				printSummary(host, count, successCount, rtts)
 			}
 		}
 	} else {
 		var icmpSuccess bool
+		var rtts []time.Duration
+		var successCount int
 		for i := 0; i < count; i++ {
-			if icmp_ping(host, ip, timeout) {
+			success, duration := icmp_ping(host, ip, timeout)
+			if success {
 				icmpSuccess = true
+				successCount++
+				rtts = append(rtts, duration)
 			}
 			if i < count-1 {
 				time.Sleep(time.Second)
 			}
+		}
+		if count > 1 {
+			printSummary(host, count, successCount, rtts)
 		}
 		if !icmpSuccess {
 			os.Exit(1)
@@ -176,7 +207,7 @@ func formatDuration(d time.Duration) string {
 }
 
 // tcp_ping attempts a TCP connection to the destination IP and port
-func tcp_ping(host string, ip *net.IPAddr, port string, timeout time.Duration) bool {
+func tcp_ping(host string, ip *net.IPAddr, port string, timeout time.Duration) (bool, time.Duration) {
 	d := net.Dialer{Timeout: timeout}
 	var hostStr string
 	if host == ip.String() {
@@ -190,20 +221,20 @@ func tcp_ping(host string, ip *net.IPAddr, port string, timeout time.Duration) b
 	duration := time.Since(start)
 	if err != nil {
 		fmt.Printf("TCP connection to %s:%s unsuccessful: %v\n", hostStr, port, err)
-		return false
+		return false, duration
 	}
 	defer conn.Close()
 
 	fmt.Printf("TCP connection to %s:%s successful - RTT: %s\n", hostStr, port, formatDuration(duration))
-	return true
+	return true, duration
 }
 
 // icmp_ping attempts an unprivileged ICMP ping using udp4 socket
-func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) bool {
+func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) (bool, time.Duration) {
 	conn, err := icmp.ListenPacket("udp4", "0.0.0.0")
 	if err != nil {
 		fmt.Printf("ICMP ping error: failed to listen on socket: %v\n", err)
-		return false
+		return false, 0
 	}
 	defer conn.Close()
 
@@ -226,20 +257,20 @@ func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) bool {
 	msg_bytes, err := msg.Marshal(nil)
 	if err != nil {
 		fmt.Printf("ICMP ping error: failed to marshal message: %v\n", err)
-		return false
+		return false, 0
 	}
 
 	start := time.Now()
 	dst := &net.UDPAddr{IP: ip.IP}
 	if _, err := conn.WriteTo(msg_bytes, dst); err != nil {
 		fmt.Printf("ICMP ping error: failed to send packet: %v\n", err)
-		return false
+		return false, 0
 	}
 
 	err = conn.SetReadDeadline(time.Now().Add(timeout))
 	if err != nil {
 		fmt.Printf("ICMP ping error: failed to set timeout: %v\n", err)
-		return false
+		return false, 0
 	}
 
 	reply := make([]byte, 1500)
@@ -247,33 +278,33 @@ func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) bool {
 	duration := time.Since(start)
 	if err != nil {
 		fmt.Printf("ICMP ping to %s timed out or failed: %v\n", hostStr, err)
-		return false
+		return false, duration
 	}
 
 	parsed_reply, err := icmp.ParseMessage(1, reply[:n])
 	if err != nil {
 		fmt.Printf("ICMP ping error: failed to parse reply: %v\n", err)
-		return false
+		return false, duration
 	}
 
 	switch parsed_reply.Type {
 	case ipv4.ICMPTypeEchoReply:
 		fmt.Printf("ICMP ping to %s successful - RTT: %s\n", hostStr, formatDuration(duration))
-		return true
+		return true, duration
 	case ipv4.ICMPTypeDestinationUnreachable:
 		fmt.Printf("ICMP ping to %s failed: Destination Unreachable\n", hostStr)
-		return false
+		return false, duration
 	case ipv4.ICMPTypeTimeExceeded:
 		fmt.Printf("ICMP ping to %s failed: Time Exceeded\n", hostStr)
-		return false
+		return false, duration
 	default:
 		fmt.Printf("ICMP ping to %s unsuccessful (ICMP type: %v, code: %d)\n", hostStr, parsed_reply.Type, parsed_reply.Code)
-		return false
+		return false, duration
 	}
 }
 
 // print_certificate establishes a TLS connection to print certificate information
-func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Duration) bool {
+func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Duration) (bool, time.Duration) {
 	config := &tls.Config{
 		InsecureSkipVerify: true,
 		ServerName:         host,
@@ -292,14 +323,14 @@ func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Du
 	duration := time.Since(start)
 	if err != nil {
 		fmt.Printf("TLS connection to %s:%s failed: %v\n", hostStr, port, err)
-		return false
+		return false, duration
 	}
 	defer conn.Close()
 
 	state := conn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
 		fmt.Printf("TLS connection to %s:%s successful, but no certificates presented.\n", hostStr, port)
-		return false
+		return false, duration
 	}
 
 	cert := state.PeerCertificates[0]
@@ -371,7 +402,30 @@ func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Du
 		}
 	}
 
-	return true
+	return true, duration
+}
+
+// printSummary prints end-of-run ping summary metrics
+func printSummary(host string, total, success int, rtts []time.Duration) {
+	fmt.Printf("\n--- %s netprobe statistics ---\n", host)
+	loss := float64(total-success) / float64(total) * 100
+	fmt.Printf("%d probes sent, %d successful, %.1f%% loss\n", total, success, loss)
+	if len(rtts) > 0 {
+		min := rtts[0]
+		max := rtts[0]
+		var totalRTT time.Duration
+		for _, rtt := range rtts {
+			if rtt < min {
+				min = rtt
+			}
+			if rtt > max {
+				max = rtt
+			}
+			totalRTT += rtt
+		}
+		avg := totalRTT / time.Duration(len(rtts))
+		fmt.Printf("Round-trip min/avg/max = %s/%s/%s\n", formatDuration(min), formatDuration(avg), formatDuration(max))
+	}
 }
 
 // tlsVersionString converts TLS protocol version uint16 to its string representation
