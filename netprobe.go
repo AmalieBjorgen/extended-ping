@@ -303,7 +303,12 @@ func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Du
 	}
 
 	cert := state.PeerCertificates[0]
-	fmt.Printf("TLS connection to %s:%s successful (RTT: %v)\n\n", hostStr, port, formatDuration(duration))
+	fmt.Printf("TLS connection to %s:%s successful (RTT: %v)\n", hostStr, port, formatDuration(duration))
+	cipherName := tls.CipherSuiteName(state.CipherSuite)
+	if cipherName == "" {
+		cipherName = fmt.Sprintf("0x%04X", state.CipherSuite)
+	}
+	fmt.Printf("Negotiated TLS:  %s with cipher %s\n\n", tlsVersionString(state.Version), cipherName)
 	fmt.Printf("Certificate Details:\n")
 	fmt.Printf("  Subject (CN): %s\n", cert.Subject.CommonName)
 	if len(cert.Subject.Organization) > 0 {
@@ -367,4 +372,20 @@ func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Du
 	}
 
 	return true
+}
+
+// tlsVersionString converts TLS protocol version uint16 to its string representation
+func tlsVersionString(v uint16) string {
+	switch v {
+	case tls.VersionTLS10:
+		return "TLS 1.0"
+	case tls.VersionTLS11:
+		return "TLS 1.1"
+	case tls.VersionTLS12:
+		return "TLS 1.2"
+	case tls.VersionTLS13:
+		return "TLS 1.3"
+	default:
+		return fmt.Sprintf("TLS 0x%04X", v)
+	}
 }
