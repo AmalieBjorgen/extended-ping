@@ -309,7 +309,17 @@ func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Du
 	if len(cert.Subject.Organization) > 0 {
 		fmt.Printf("  Organization: %s\n", cert.Subject.Organization[0])
 	}
-	fmt.Printf("  Issuer:       %s\n", cert.Issuer.CommonName)
+	var issuerStr string
+	if len(cert.Issuer.Organization) > 0 {
+		if cert.Issuer.CommonName != "" {
+			issuerStr = fmt.Sprintf("%s (%s)", cert.Issuer.Organization[0], cert.Issuer.CommonName)
+		} else {
+			issuerStr = cert.Issuer.Organization[0]
+		}
+	} else {
+		issuerStr = cert.Issuer.CommonName
+	}
+	fmt.Printf("  Issuer:       %s\n", issuerStr)
 	fmt.Printf("  Valid From:   %s\n", cert.NotBefore.Format("2006-01-02 15:04:05 UTC"))
 	fmt.Printf("  Valid Until:  %s\n", cert.NotAfter.Format("2006-01-02 15:04:05 UTC"))
 
