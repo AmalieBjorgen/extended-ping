@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"time"
@@ -12,82 +11,183 @@ import (
 )
 
 func main() {
-	args := os.Args
-	if len(args) != 2 {
-		fmt.Println("Usage: eping <host>")
-		os.Exit(1)
-	}
+	var host string
+	var port string
+	var timeout = 3 * time.Second
+	var count = 1
 
-	host := args[1]
-	ip, err := net.ResolveIPAddr("ip4", host)
-	if err != nil {
-		fmt.Println("Cannot resolve IP address to host.")
-		os.Exit(1)
-	}
-	var timeout time.Duration = time.Second * 3 // Seconds
-
-	common_ports_tcp := [...]string{"20", "21", "22", "23", "25", "53", "80", "110", "143", "443", "3389", "8080"}
-	common_ports_udp := [...]string{"53", "67", "68", "69", "123", "161", "500", "514", "1812", "1813"}
-	icmp_ping(ip)
-
-	for _, port := range common_ports_tcp {
-		tcp_ping(ip, port, timeout)
-	}
-
-	for _, port := range common_ports_udp {
-		udp_ping(ip, port, timeout)
-	}
-}
-
-func tcp_ping(host *net.IPAddr, port string, timeout time.Duration) {
-	d := net.Dialer{Timeout: timeout}
-	conn, err := d.Dial("tcp", fmt.Sprintf("%v:%v", host, port))
-	if err != nil {
-		fmt.Printf("TCP ping to %s:%s unsuccessful.\n", host, port)
-		return
-	}
-	defer conn.Close()
-
-	fmt.Printf("TCP ping to %s:%s successful.\n", host, port)
-}
-
-func udp_ping(host *net.IPAddr, port string, timeout time.Duration) {
-	conn, err := net.DialTimeout("udp", fmt.Sprintf("%v:%v", host, port), timeout)
-	if err != nil {
-		fmt.Printf("1 UDP ping to %s:%s unsuccessful.\n", host, port)
-		return
-	}
-	defer conn.Close()
-
-	message := []byte("ping")
-	_, err = conn.Write(message)
-	if err != nil {
-		fmt.Printf("2 UDP ping to %s:%s unsuccessful.\n", host, port)
-		return
-	}
-
-	conn.SetReadDeadline(time.Now().Add(timeout))
-
-	buffer := make([]byte, 65535)
-	_, err = conn.Read(buffer)
-	if err != nil {
-		if err != io.EOF {
-			fmt.Printf("UDP ping to %s:%s unsuccessful.\n", host, port)
-			return
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-p" || arg == "--port" {
+			if i+1 < len(args) {
+				port = args[i+1]
+				i++
+			} else {
+				fmt.Println("Error: flag -p/--port requires an argument")
+				os.Exit(1)
+			}
+		} else if arg == "-t" || arg == "--timeout" {
+			if i+1 < len(args) {
+				val := args[i+1]
+				i++
+				d, err := time.ParseDuration(val)
+				if err == nil {
+					timeout = d
+				} else {
+					// Try parsing as integer seconds
+					var sec int
+					_, err := fmt.Sscanf(val, "%d", &sec)
+					if err == nil {
+						timeout = time.Duration(sec) * time.Second
+					} else {
+						fmt.Printf("Error parsing timeout: %v\n", err)
+						os.Exit(1)
+					}
+				}
+			} else {
+				fmt.Println("Error: flag -t/--timeout requires an argument")
+				os.Exit(1)
+			}
+		} else if arg == "-c" || arg == "--count" {
+			if i+1 < len(args) {
+				val := args[i+1]
+				i++
+				_, err := fmt.Sscanf(val, "%d", &count)
+				if err != nil || count <= 0 {
+					fmt.Printf("Error: invalid count: %s\n", val)
+					os.Exit(1)
+				}
+			} else {
+				fmt.Println("Error: flag -c/--count requires an argument")
+				os.Exit(1)
+			}
+		} else if arg == "-h" || arg == "--help" {
+			printUsage()
+			os.Exit(0)
+		} else {
+			// Positional argument: host
+			if host == "" {
+				host = arg
+			} else {
+				fmt.Printf("Error: unexpected argument '%s'\n", arg)
+				printUsage()
+				os.Exit(1)
+			}
 		}
 	}
 
-	fmt.Printf("UDP ping to %s:%s successful.\n", host, port)
-}
-
-func icmp_ping(host *net.IPAddr) {
-	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
-	if err != nil {
-		fmt.Println("Error2: ", err)
-		return
+	if host == "" {
+		printUsage()
+		os.Exit(1)
 	}
 
+	ip, err := net.ResolveIPAddr("ip4", host)
+	if err != nil {
+		fmt.Printf("Cannot resolve IP address for host '%s': %v\n", host, err)
+		os.Exit(1)
+	}
+
+	if port != "" {
+		var tcpSuccess bool
+		for i := 0; i < count; i++ {
+			if tcp_ping(host, ip, port, timeout) {
+				tcpSuccess = true
+			}
+			if i < count-1 {
+				time.Sleep(time.Second)
+			}
+		}
+
+		if !tcpSuccess {
+			fmt.Println("Falling back to ICMP ping...")
+			var icmpSuccess bool
+			for i := 0; i < count; i++ {
+				if icmp_ping(host, ip, timeout) {
+					icmpSuccess = true
+				}
+				if i < count-1 {
+					time.Sleep(time.Second)
+				}
+			}
+			if !icmpSuccess {
+				os.Exit(1)
+			}
+		}
+	} else {
+		var icmpSuccess bool
+		for i := 0; i < count; i++ {
+			if icmp_ping(host, ip, timeout) {
+				icmpSuccess = true
+			}
+			if i < count-1 {
+				time.Sleep(time.Second)
+			}
+		}
+		if !icmpSuccess {
+			os.Exit(1)
+		}
+	}
+}
+
+func printUsage() {
+	fmt.Println("Usage: eping <host> [options]")
+	fmt.Println("\nOptions:")
+	fmt.Println("  -p, --port <port>       TCP port to check (e.g., 80, 443)")
+	fmt.Println("  -t, --timeout <timeout> Timeout duration (e.g., 3s, 5)")
+	fmt.Println("  -c, --count <count>     Number of attempts to perform (default: 1)")
+	fmt.Println("  -h, --help              Show this help message")
+}
+
+// formatDuration formats duration into a user-friendly string
+func formatDuration(d time.Duration) string {
+	if d < time.Millisecond {
+		return fmt.Sprintf("%.1fµs", float64(d)/float64(time.Microsecond))
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%.1fms", float64(d)/float64(time.Millisecond))
+	}
+	return fmt.Sprintf("%.2fs", float64(d)/float64(time.Second))
+}
+
+// tcp_ping attempts a TCP connection to the destination IP and port
+func tcp_ping(host string, ip *net.IPAddr, port string, timeout time.Duration) bool {
+	d := net.Dialer{Timeout: timeout}
+	var hostStr string
+	if host == ip.String() {
+		hostStr = ip.String()
+	} else {
+		hostStr = fmt.Sprintf("%s (%s)", host, ip.String())
+	}
+
+	start := time.Now()
+	conn, err := d.Dial("tcp", net.JoinHostPort(ip.String(), port))
+	duration := time.Since(start)
+	if err != nil {
+		fmt.Printf("TCP connection to %s:%s unsuccessful: %v\n", hostStr, port, err)
+		return false
+	}
 	defer conn.Close()
+
+	fmt.Printf("TCP connection to %s:%s successful - RTT: %s\n", hostStr, port, formatDuration(duration))
+	return true
+}
+
+// icmp_ping attempts an unprivileged ICMP ping using udp4 socket
+func icmp_ping(host string, ip *net.IPAddr, timeout time.Duration) bool {
+	conn, err := icmp.ListenPacket("udp4", "0.0.0.0")
+	if err != nil {
+		fmt.Printf("ICMP ping error: failed to listen on socket: %v\n", err)
+		return false
+	}
+	defer conn.Close()
+
+	var hostStr string
+	if host == ip.String() {
+		hostStr = ip.String()
+	} else {
+		hostStr = fmt.Sprintf("%s (%s)", host, ip.String())
+	}
 
 	msg := icmp.Message{
 		Type: ipv4.ICMPTypeEcho,
@@ -95,48 +195,54 @@ func icmp_ping(host *net.IPAddr) {
 		Body: &icmp.Echo{
 			ID:   os.Getpid() & 0xffff,
 			Seq:  1,
-			Data: []byte(""),
+			Data: []byte("ping"),
 		},
 	}
 	msg_bytes, err := msg.Marshal(nil)
 	if err != nil {
-		fmt.Println(err)
-		return
+		fmt.Printf("ICMP ping error: failed to marshal message: %v\n", err)
+		return false
 	}
 
-	if _, err := conn.WriteTo(msg_bytes, host); err != nil {
-		fmt.Println(err)
-		panic(err)
+	start := time.Now()
+	dst := &net.UDPAddr{IP: ip.IP}
+	if _, err := conn.WriteTo(msg_bytes, dst); err != nil {
+		fmt.Printf("ICMP ping error: failed to send packet: %v\n", err)
+		return false
 	}
 
-	err = conn.SetReadDeadline(time.Now().Add(time.Second * 1))
+	err = conn.SetReadDeadline(time.Now().Add(timeout))
 	if err != nil {
-		fmt.Println(err)
-		return
+		fmt.Printf("ICMP ping error: failed to set timeout: %v\n", err)
+		return false
 	}
-	reply := make([]byte, 644)
+
+	reply := make([]byte, 1500)
 	n, _, err := conn.ReadFrom(reply)
-
+	duration := time.Since(start)
 	if err != nil {
-		fmt.Println(err)
-		return
+		fmt.Printf("ICMP ping to %s timed out or failed: %v\n", hostStr, err)
+		return false
 	}
 
 	parsed_reply, err := icmp.ParseMessage(1, reply[:n])
-
 	if err != nil {
-		fmt.Println(err)
-		return
+		fmt.Printf("ICMP ping error: failed to parse reply: %v\n", err)
+		return false
 	}
 
-	switch parsed_reply.Code {
-	case 0:
-		fmt.Printf("ICMP ping to %s successful.\n", host)
-	case 3:
-		fmt.Printf("Host %s is unreachable\n", host)
-	case 11:
-		fmt.Printf("Host %s is slow\n", host)
+	switch parsed_reply.Type {
+	case ipv4.ICMPTypeEchoReply:
+		fmt.Printf("ICMP ping to %s successful - RTT: %s\n", hostStr, formatDuration(duration))
+		return true
+	case ipv4.ICMPTypeDestinationUnreachable:
+		fmt.Printf("ICMP ping to %s failed: Destination Unreachable\n", hostStr)
+		return false
+	case ipv4.ICMPTypeTimeExceeded:
+		fmt.Printf("ICMP ping to %s failed: Time Exceeded\n", hostStr)
+		return false
 	default:
-		fmt.Printf("Host %s is unreachable\n", host)
+		fmt.Printf("ICMP ping to %s unsuccessful (ICMP type: %v, code: %d)\n", hostStr, parsed_reply.Type, parsed_reply.Code)
+		return false
 	}
 }
