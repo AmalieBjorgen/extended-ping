@@ -339,8 +339,17 @@ func print_certificate(host string, ip *net.IPAddr, port string, timeout time.Du
 	}
 
 	// Verification check
+	var intermediates *x509.CertPool
+	if len(state.PeerCertificates) > 1 {
+		intermediates = x509.NewCertPool()
+		for _, c := range state.PeerCertificates[1:] {
+			intermediates.AddCert(c)
+		}
+	}
+
 	opts := x509.VerifyOptions{
-		DNSName: host,
+		DNSName:       host,
+		Intermediates: intermediates,
 	}
 	_, verifyErr := cert.Verify(opts)
 	if verifyErr != nil {
